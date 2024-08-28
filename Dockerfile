@@ -1,4 +1,3 @@
-
 FROM kerberos/base:eb6b088 AS build-machinery
 LABEL AUTHOR=Kerberos.io
 
@@ -10,10 +9,33 @@ ENV GOSUMDB=off
 ##########################################
 # Installing some additional dependencies.
 
-RUN apt-get upgrade -y && apt-get update && apt-get install -y --fix-missing --no-install-recommends \
-	git build-essential cmake pkg-config unzip libgtk2.0-dev \
-	curl ca-certificates libcurl4-openssl-dev libssl-dev libjpeg62-turbo-dev && \
-	rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --fix-missing --no-install-recommends \
+    git build-essential cmake pkg-config unzip libgtk2.0-dev \
+    curl ca-certificates libcurl4-openssl-dev libssl-dev libjpeg62-turbo-dev \
+    wget libavcodec-dev libavformat-dev libswscale-dev \
+    libtbb2 libtbb-dev libjpeg-dev libpng-dev libtiff-dev libdc1394-22-dev \
+    ffmpeg sudo && \
+    rm -rf /var/lib/apt/lists/*
+
+#############################################
+# Install OpenCV and FFmpeg from source with -fPIC flag
+
+# Install OpenCV from source
+RUN curl -L https://github.com/opencv/opencv/archive/refs/tags/4.10.0.tar.gz -o opencv.tar.gz && \
+    mkdir opencv && tar -xzf opencv.tar.gz -C opencv --strip-components=1 && rm opencv.tar.gz && \
+    cd opencv && mkdir build && cd build && \
+    cmake -D CMAKE_BUILD_TYPE=Release -D CMAKE_INSTALL_PREFIX=/usr/local -D BUILD_SHARED_LIBS=OFF -D CMAKE_CXX_FLAGS=-fPIC .. && \
+    make -j$(nproc) && make install && cd ../.. && rm -rf opencv
+
+############################################
+# Install GoCV
+
+RUN mkdir -p /go/src/github.com/kerberos-io/agent/machinery && \
+    cd /go/src/github.com/kerberos-io/agent/machinery && \
+    go mod init kerberos.io/agent/machinery && \
+    go get -d gocv.io/x/gocv@latest && \
+    cd $GOPATH/pkg/mod/gocv.io/x/gocv* && \
+    make install
 
 ##############################################################################
 # Copy all the relevant source code in the Docker image, so we can build this.
@@ -32,19 +54,19 @@ RUN cat /go/src/github.com/kerberos-io/agent/machinery/version
 # Build Machinery
 
 RUN cd /go/src/github.com/kerberos-io/agent/machinery && \
-	go mod download && \
-	go build -tags timetzdata,netgo,osusergo --ldflags '-s -w -extldflags "-static -latomic"' main.go && \
-	mkdir -p /agent && \
-	mv main /agent && \
-	mv version /agent && \
-	mv data /agent && \
-	mkdir -p /agent/data/cloud && \
-	mkdir -p /agent/data/snapshots && \
-	mkdir -p /agent/data/log && \
-	mkdir -p /agent/data/recordings && \
-	mkdir -p /agent/data/capture-test && \
-	mkdir -p /agent/data/config && \
-	rm -rf /go/src/gitlab.com/
+    go mod download && \
+    go build -tags timetzdata,netgo,osusergo --ldflags '-s -w -extldflags "-static -latomic"' main.go && \
+    mkdir -p /agent && \
+    mv main /agent && \
+    mv version /agent && \
+    mv data /agent && \
+    mkdir -p /agent/data/cloud && \
+    mkdir -p /agent/data/snapshots && \
+    mkdir -p /agent/data/log && \
+    mkdir -p /agent/data/recordings && \
+    mkdir -p /agent/data/capture-test && \
+    mkdir -p /agent/data/config && \
+    rm -rf /go/src/gitlab.com/
 
 ####################################
 # Let's create a /dist folder containing just the files necessary for runtime.
@@ -63,12 +85,12 @@ RUN /dist/agent/main version
 
 ENV BENTO4_VERSION 1.6.0-639
 RUN cd /tmp && git clone https://github.com/axiomatic-systems/Bento4 && cd Bento4 && \
-	git checkout tags/v${BENTO4_VERSION} && \
-	cd Build && \
-	cmake -DCMAKE_BUILD_TYPE=Release .. && \
-	make && \
-	mv /tmp/Bento4/Build/mp4fragment /dist/agent/ && \
-	rm -rf /tmp/Bento4
+    git checkout tags/v${BENTO4_VERSION} && \
+    cd Build && \
+    cmake -DCMAKE_BUILD_TYPE=Release .. && \
+    make && \
+    mv /tmp/Bento4/Build/mp4fragment /dist/agent/ && \
+    rm -rf /tmp/Bento4
 
 FROM node:18.14.0-alpine3.16 AS build-ui
 
@@ -80,7 +102,7 @@ RUN apk update && apk upgrade --available && sync
 RUN mkdir -p /go/src/github.com/kerberos-io/agent/machinery/www
 COPY ui /go/src/github.com/kerberos-io/agent/ui
 RUN cd /go/src/github.com/kerberos-io/agent/ui && rm -rf yarn.lock && yarn config set network-timeout 300000 && \
-	yarn && yarn build
+    yarn && yarn build
 
 ####################################
 # Let's create a /dist folder containing just the files necessary for runtime.
@@ -135,7 +157,7 @@ RUN apk add libcap && setcap 'cap_net_bind_service=+ep' /home/agent/main
 USER agent
 
 ######################################
-# By default the app runs on port 80
+# By default, the app runs on port 80
 
 EXPOSE 80
 
