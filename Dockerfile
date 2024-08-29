@@ -1,3 +1,7 @@
+# docker build -t kerberos/agent .
+# docker run -p 80:80 kerberos/agent
+
+
 
 FROM kerberos/base:eb6b088 AS build-machinery
 LABEL AUTHOR=Kerberos.io
@@ -12,10 +16,9 @@ ENV GOSUMDB=off
 
 RUN apt-get upgrade -y && apt-get update && apt-get install -y --fix-missing --no-install-recommends \
 	git build-essential cmake pkg-config unzip libgtk2.0-dev \
-	curl ca-certificates libcurl4-openssl-dev libssl-dev libjpeg62-turbo-dev python3 python3-pip && \
+	curl ca-certificates libcurl4-openssl-dev libssl-dev libjpeg62-turbo-dev && \
 	rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install ultralytics
 ##############################################################################
 # Copy all the relevant source code in the Docker image, so we can build this.
 
@@ -93,7 +96,7 @@ RUN mkdir -p ./agent && cp -r /go/src/github.com/kerberos-io/agent/machinery/www
 ############################################
 # Publish main binary to GitHub release
 
-FROM alpine:latest
+FROM python:3.12-alpine as build-env
 
 ############################
 # Protect by non-root user.
@@ -106,7 +109,31 @@ RUN addgroup -S kerberosio && adduser -S agent -G kerberosio && addgroup agent v
 COPY --chown=0:0 --from=build-machinery /dist /
 COPY --chown=0:0 --from=build-ui /dist /
 
-RUN apk update && apk add ca-certificates curl libstdc++ libc6-compat --no-cache && rm -rf /var/cache/apk/*
+# Install necessary build tools and libraries
+RUN apk update && apk add --no-cache \
+    ca-certificates \
+    curl \
+    libstdc++ \
+    libc6-compat \
+    python3 \
+    py3-pip \
+    build-base \
+    python3-dev \
+    musl-dev \
+    jpeg-dev \
+    zlib-dev \
+    freetype-dev \
+    lame-dev \
+    openblas-dev \
+    libpng-dev \
+    tiff-dev \
+    && rm -rf /var/cache/apk/*
+
+# Install OpenCV and related libraries directly via apk
+RUN apk add --no-cache opencv-dev
+
+RUN pip install --upgrade pip setuptools wheel 
+RUN pip install --prefer-binary  ultralytics
 
 ##################
 # Try running agent
