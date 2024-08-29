@@ -96,12 +96,15 @@ RUN mkdir -p ./agent && cp -r /go/src/github.com/kerberos-io/agent/machinery/www
 ############################################
 # Publish main binary to GitHub release
 
-FROM python:3.12-alpine as build-env
+FROM python:3.12 as build-env
 
 ############################
 # Protect by non-root user.
 
-RUN addgroup -S kerberosio && adduser -S agent -G kerberosio && addgroup agent video
+# Add a group and a user correctly
+RUN addgroup --system kerberosio && \
+    adduser --system --ingroup kerberosio agent && \
+    adduser agent video
 
 #################################
 # Copy files from previous images
@@ -109,31 +112,36 @@ RUN addgroup -S kerberosio && adduser -S agent -G kerberosio && addgroup agent v
 COPY --chown=0:0 --from=build-machinery /dist /
 COPY --chown=0:0 --from=build-ui /dist /
 
-# Install necessary build tools and libraries
-RUN apk update && apk add --no-cache \
-    ca-certificates \
-    curl \
-    libstdc++ \
-    libc6-compat \
-    python3 \
-    py3-pip \
-    build-base \
-    python3-dev \
-    musl-dev \
-    jpeg-dev \
-    zlib-dev \
-    freetype-dev \
-    lame-dev \
-    openblas-dev \
+# Install necessary packages for building Python packages and running Ultralytics
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    make \
+    libffi-dev \
+    libssl-dev \
+    libjpeg-dev \
+    zlib1g-dev \
     libpng-dev \
-    tiff-dev \
-    && rm -rf /var/cache/apk/*
+    libtiff-dev \
+    libfreetype6-dev \
+    liblcms2-dev \
+    tcl-dev \
+    tk-dev \
+    libwebp-dev \
+    git \
+    curl
 
-# Install OpenCV and related libraries directly via apk
-RUN apk add --no-cache opencv-dev
+# Install pip wheel (recommended for faster builds)
+RUN pip install --upgrade pip setuptools wheel
 
-RUN pip install --upgrade pip setuptools wheel 
-RUN pip install --prefer-binary  ultralytics
+# Install numpy and matplotlib first
+RUN pip install numpy==1.26.4 matplotlib==3.9.2
+
+# Install OpenCV using the headless version to avoid GUI dependencies
+RUN pip install opencv-python-headless==4.8.0.76
+
+# Install Ultralytics package
+RUN pip install ultralytics
 
 ##################
 # Try running agent
