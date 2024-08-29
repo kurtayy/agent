@@ -101,9 +101,9 @@ FROM python:3.12 as build-env
 ############################
 # Protect by non-root user.
 
-# Add a group and a user correctly
+# Add a group and a user correctly with a home directory
 RUN addgroup --system kerberosio && \
-    adduser --system --ingroup kerberosio agent && \
+    adduser --system --ingroup kerberosio --home /home/agent agent && \
     adduser agent video
 
 #################################
@@ -134,19 +134,13 @@ RUN apt-get update && apt-get install -y \
 # Install pip wheel (recommended for faster builds)
 RUN pip install --upgrade pip setuptools wheel
 
-# Install numpy and matplotlib first
-RUN pip install numpy==1.26.4 matplotlib==3.9.2
-
-# Install OpenCV using the headless version to avoid GUI dependencies
-RUN pip install opencv-python-headless==4.8.0.76
-
 # Install Ultralytics package
 RUN pip install ultralytics
 
 ##################
 # Try running agent
 
-RUN mv /agent/* /home/agent/
+RUN mkdir -p /home/agent && mv /agent/* /home/agent/
 RUN cp /home/agent/mp4fragment /usr/local/bin/
 RUN /home/agent/main version
 
@@ -163,7 +157,7 @@ RUN chown -R agent:kerberosio /home/agent/www
 
 ###########################
 # Grant the necessary root capabilities to the process trying to bind to the privileged port
-RUN apk add libcap && setcap 'cap_net_bind_service=+ep' /home/agent/main
+RUN apt-get install -y libcap2-bin && setcap 'cap_net_bind_service=+ep' /home/agent/main
 
 ###################
 # Run non-root user
