@@ -131,6 +131,7 @@ RUN apt-get update && apt-get install -y \
     git \
     curl
 
+RUN apt-get install -y libglib2.0-0 
 # Install pip wheel (recommended for faster builds)
 RUN pip install --upgrade pip setuptools wheel
 
@@ -140,9 +141,16 @@ RUN pip install ultralytics
 ##################
 # Try running agent
 
+RUN apt-get update && \
+    apt-get install -y libglib2.0-0 libgl1-mesa-glx libgl1-mesa-dev libgl1 libcap2-bin && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+
 RUN mkdir -p /home/agent && mv /agent/* /home/agent/
 RUN cp /home/agent/mp4fragment /usr/local/bin/
 RUN /home/agent/main version
+COPY machinery/src/computervision/yolo_detection.py /home/agent/yolo_detection.py
+
 
 #######################
 # Make template config

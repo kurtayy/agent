@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"image"
+	"image/jpeg"
+	"os"
 	"os/exec"
 	"time"
 
@@ -129,6 +131,11 @@ func ProcessMotion(motionCursor *packets.QueueCursor, configuration *models.Conf
 					imageArray[2] = &grayImage
 				}
 
+				if imageArray[2] == nil {
+					log.Log.Error("Image array contains nil. Skipping YOLO detection.")
+					continue
+				}
+
 				// Validate conditions
 				detectMotion, err := conditions.Validate(loc, configuration)
 				if !detectMotion && err != nil {
@@ -140,7 +147,11 @@ func ProcessMotion(motionCursor *packets.QueueCursor, configuration *models.Conf
 
 					// Run YOLO detection after validating the conditions
 					tempImagePath := "/tmp/frame.jpg" // Choose a suitable temp path
-					saveImageToFile(imageArray[2], tempImagePath)
+					err = saveImageToFile(imageArray[2], tempImagePath)
+					if err != nil {
+						log.Log.Error(fmt.Sprintf("Failed to save image to %s: %s", tempImagePath, err.Error()))
+						continue
+					}
 
 					detections, err := runYOLODetection(tempImagePath)
 					if err != nil {
@@ -230,25 +241,29 @@ func AbsDiffBitwiseAndThreshold(img1 *image.Gray, img2 *image.Gray, img3 *image.
 	return changes
 }
 
+// saveImageToFile saves an image to the specified path.
 func saveImageToFile(img *image.Gray, path string) error {
-	// Implement the function to save the image to the file
-	// Use packages like "image/jpeg" to encode and save the file.
-	// Example:
-	// file, err := os.Create(path)
-	// if err != nil {
-	//     return err
-	// }
-	// defer file.Close()
-	// return jpeg.Encode(file, img, nil)
+	// Create the file
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	// Encode the image to the file in JPEG format
+	if err := jpeg.Encode(file, img, nil); err != nil {
+		return err
+	}
+
 	return nil
 }
 
 func runYOLODetection(imagePath string) ([]Detection, error) {
 	cmd := exec.Command("python3", "yolo_detection.py", imagePath)
 
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput() // Capture both stdout and stderr
 	if err != nil {
-		log.Log.Error(fmt.Sprintf("Error running YOLO detection script: ", err.Error()))
+		log.Log.Error(fmt.Sprintf("Error running YOLO detection script: %s, output: %s", err.Error(), string(output)))
 		return nil, err
 	}
 
