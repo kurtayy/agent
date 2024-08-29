@@ -1,64 +1,24 @@
 package computervision
 
 import (
-	"gocv.io/x/gocv" // Assuming OpenCV for YOLO support
+	"encoding/json"
 	"image"
+	"os/exec"
 	"time"
+
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	geo "github.com/kellydunn/golang-geo"
 	"github.com/kerberos-io/agent/machinery/src/capture"
 	"github.com/kerberos-io/agent/machinery/src/conditions"
-	"github.com/kerberos-io/agent/machinery/src/geo"
+	"github.com/kerberos-io/agent/machinery/src/log"
 	"github.com/kerberos-io/agent/machinery/src/models"
 	"github.com/kerberos-io/agent/machinery/src/packets"
-	"github.com/kerberos-io/agent/machinery/src/utils"
 )
 
-// Initialize the YOLO model
-func InitYOLOModel() gocv.Net {
-	// Load the YOLO model
-	yoloModel := "yolov3.weights" // Path to the YOLO weights file
-	yoloConfig := "yolov3.cfg"    // Path to the YOLO config file
-	backend := gocv.NetBackendDefault
-	target := gocv.NetTargetCPU
-
-	net := gocv.ReadNet(yoloModel, yoloConfig)
-	net.SetPreferableBackend(backend)
-	net.SetPreferableTarget(target)
-
-	return net
-}
-
-// YOLO detection function
-func DetectHumanWithYOLO(img gocv.Mat, net gocv.Net) bool {
-	// Set up YOLO input size and swap RGB
-	blob := gocv.BlobFromImage(img, 1/255.0, image.Pt(416, 416), gocv.NewScalar(0, 0, 0, 0), true, false)
-	defer blob.Close()
-
-	// Set the input to the YOLO network
-	net.SetInput(blob, "")
-
-	// Run forward pass to get output
-	output := net.ForwardLayers([]string{"yolo_82", "yolo_94", "yolo_106"})
-	defer func() {
-		for i := range output {
-			output[i].Close()
-		}
-	}()
-
-	// Iterate over the detections
-	for i := range output {
-		data, _ := output[i].DataPtrFloat32()
-		for j := 0; j < len(data); j += 7 {
-			confidence := data[4]
-			if confidence > 0.5 { // Threshold for confidence
-				classID := data[5]
-				if int(classID) == 0 { // Assuming classID 0 is for "person" in the YOLO model
-					return true // Human detected
-				}
-			}
-		}
-	}
-	return false
+// Detection struct for YOLO output
+type Detection struct {
+	Class      string  `json:"class"`
+	Confidence float64 `json:"confidence"`
 }
 
 func ProcessMotion(motionCursor *packets.QueueCursor, configuration *models.Configuration, communication *models.Communication, mqttClient mqtt.Client, rtspClient capture.RTSPClient) {
@@ -71,20 +31,25 @@ func ProcessMotion(motionCursor *packets.QueueCursor, configuration *models.Conf
 	var changesToReturn = 0
 
 	pixelThreshold := config.Capture.PixelChangeThreshold
+	// Might not be set in the config file, so set it to 150
 	if pixelThreshold == 0 {
 		pixelThreshold = 150
 	}
 
 	if config.Capture.Continuous == "true" {
+
 		log.Log.Info("computervision.main.ProcessMotion(): you've enabled continuous recording, so no motion detection required.")
+
 	} else {
-		log.Log.Info("computervision.main.ProcessMotion(): motion detection is enabled, starting the motion detection.")
+
+		log.Log.Info("computervision.main.ProcessMotion(): motion detected is enabled, so starting the motion detection.")
 
 		hubKey := config.HubKey
 		deviceKey := config.Key
 
-		// Initialize first 2 elements
+		// Initialise first 2 elements
 		var imageArray [3]*image.Gray
+
 		j := 0
 
 		var cursorError error
@@ -92,6 +57,7 @@ func ProcessMotion(motionCursor *packets.QueueCursor, configuration *models.Conf
 
 		for cursorError == nil {
 			pkt, cursorError = motionCursor.ReadPacket()
+			// Check If valid package.
 			if len(pkt.Data) > 0 && pkt.IsKeyFrame {
 				grayImage, err := rtspClient.DecodePacketRaw(pkt)
 				if err == nil {
@@ -130,6 +96,7 @@ func ProcessMotion(motionCursor *packets.QueueCursor, configuration *models.Conf
 			rows := bounds.Dy()
 			cols := bounds.Dx()
 
+			// Make fixed size array of uinty8
 			for y := 0; y < rows; y++ {
 				for x := 0; x < cols; x++ {
 					for _, poly := range polyObjects {
@@ -142,16 +109,16 @@ func ProcessMotion(motionCursor *packets.QueueCursor, configuration *models.Conf
 			}
 		}
 
-		// Initialize YOLO model
-		net := InitYOLOModel()
-		defer net.Close()
-
-		// Start the motion detection
+		// If no region is set, we'll skip the motion detection
 		if len(coordinatesToCheck) > 0 {
+
+			// Start the motion detection
 			i := 0
 
 			for cursorError == nil {
 				pkt, cursorError = motionCursor.ReadPacket()
+
+				// Check If valid package.
 				if len(pkt.Data) == 0 || !pkt.IsKeyFrame {
 					continue
 				}
@@ -161,65 +128,74 @@ func ProcessMotion(motionCursor *packets.QueueCursor, configuration *models.Conf
 					imageArray[2] = &grayImage
 				}
 
-				// Validate conditions (time window, URI response, etc.)
+				// Validate conditions
 				detectMotion, err := conditions.Validate(loc, configuration)
 				if !detectMotion && err != nil {
 					log.Log.Debug("computervision.main.ProcessMotion(): " + err.Error() + ".")
+					continue // Skip the rest of the loop if conditions are not met
 				}
 
 				if config.Capture.Motion != "false" && detectMotion {
 
-					// Check for pixel change to detect motion
-					isPixelChangeThresholdReached, changesToReturn = FindMotion(imageArray, coordinatesToCheck, pixelThreshold)
-					if isPixelChangeThresholdReached {
+					// Run YOLO detection after validating the conditions
+					tempImagePath := "/tmp/frame.jpg" // Choose a suitable temp path
+					saveImageToFile(imageArray[2], tempImagePath)
 
-						// YOLO-based human detection
-						yoloImg := gocv.NewMatFromBytes(imageArray[2].Bounds().Dy(), imageArray[2].Bounds().Dx(), gocv.MatTypeCV8U, imageArray[2].Pix)
-						defer yoloImg.Close()
-						if DetectHumanWithYOLO(yoloImg, net) {
-							log.Log.Info("computervision.main.ProcessMotion(): Human detected with YOLO.")
-
-							// If offline mode is disabled, send a message to the hub
-							if config.Offline != "true" {
-								if mqttClient != nil {
-									if hubKey != "" {
-										message := models.Message{
-											Payload: models.Payload{
-												Action:   "motion",
-												DeviceId: configuration.Config.Key,
-												Value: map[string]interface{}{
-													"timestamp": time.Now().Unix(),
-												},
-											},
-										}
-										payload, err := models.PackageMQTTMessage(configuration, message)
-										if err == nil {
-											mqttClient.Publish("kerberos/hub/"+hubKey, 0, false, payload)
-										} else {
-											log.Log.Info("computervision.main.ProcessMotion(): failed to package MQTT message: " + err.Error())
-										}
-									} else {
-										mqttClient.Publish("kerberos/agent/"+deviceKey, 2, false, "motion")
-									}
-								}
+					detections, err := runYOLODetection(tempImagePath)
+					if err != nil {
+						log.Log.Error("YOLO detection failed: ")
+					} else {
+						for _, detection := range detections {
+							if detection.Class == "person" && detection.Confidence > 0.5 {
+								log.Log.Info("Human detected by YOLO with confidence: ")
+								// Handle human detection as needed
 							}
-
-							if config.Capture.Recording != "false" {
-								dataToPass := models.MotionDataPartial{
-									Timestamp:       time.Now().Unix(),
-									NumberOfChanges: changesToReturn,
-								}
-								communication.HandleMotion <- dataToPass // Save data to the channel
-							}
-						} else {
-							log.Log.Info("computervision.main.ProcessMotion(): Motion detected but no human found by YOLO, ignoring.")
 						}
 					}
 
-					imageArray[0] = imageArray[1]
-					imageArray[1] = imageArray[2]
-					i++
+					// Perform motion detection
+					isPixelChangeThresholdReached, changesToReturn = FindMotion(imageArray, coordinatesToCheck, pixelThreshold)
+					if isPixelChangeThresholdReached {
+
+						// If offline mode is disabled, send a message to the hub
+						if config.Offline != "true" {
+							if mqttClient != nil {
+								if hubKey != "" {
+									message := models.Message{
+										Payload: models.Payload{
+											Action:   "motion",
+											DeviceId: configuration.Config.Key,
+											Value: map[string]interface{}{
+												"timestamp": time.Now().Unix(),
+											},
+										},
+									}
+									payload, err := models.PackageMQTTMessage(configuration, message)
+									if err == nil {
+										mqttClient.Publish("kerberos/hub/"+hubKey, 0, false, payload)
+									} else {
+										log.Log.Info("computervision.main.ProcessMotion(): failed to package MQTT message: " + err.Error())
+									}
+								} else {
+									mqttClient.Publish("kerberos/agent/"+deviceKey, 2, false, "motion")
+								}
+							}
+						}
+
+						if config.Capture.Recording != "false" {
+							dataToPass := models.MotionDataPartial{
+								Timestamp:       time.Now().Unix(),
+								NumberOfChanges: changesToReturn,
+							}
+							communication.HandleMotion <- dataToPass // Save data to the channel
+						}
+					}
 				}
+
+				// Shift images for next iteration
+				imageArray[0] = imageArray[1]
+				imageArray[1] = imageArray[2]
+				i++
 			}
 
 			if img != nil {
@@ -230,7 +206,6 @@ func ProcessMotion(motionCursor *packets.QueueCursor, configuration *models.Conf
 
 	log.Log.Debug("computervision.main.ProcessMotion(): stop the motion detection.")
 }
-
 
 func FindMotion(imageArray [3]*image.Gray, coordinatesToCheck []int, pixelChangeThreshold int) (thresholdReached bool, changesDetected int) {
 	image1 := imageArray[0]
@@ -252,4 +227,36 @@ func AbsDiffBitwiseAndThreshold(img1 *image.Gray, img2 *image.Gray, img3 *image.
 		}
 	}
 	return changes
+}
+
+func saveImageToFile(img *image.Gray, path string) error {
+	// Implement the function to save the image to the file
+	// Use packages like "image/jpeg" to encode and save the file.
+	// Example:
+	// file, err := os.Create(path)
+	// if err != nil {
+	//     return err
+	// }
+	// defer file.Close()
+	// return jpeg.Encode(file, img, nil)
+	return nil
+}
+
+func runYOLODetection(imagePath string) ([]Detection, error) {
+	// Command to run the Python script
+	cmd := exec.Command("python3", "yolo_detection.py", imagePath)
+
+	// Run the command and capture the output
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse the JSON output
+	var detections []Detection
+	if err := json.Unmarshal(output, &detections); err != nil {
+		return nil, err
+	}
+
+	return detections, nil
 }
