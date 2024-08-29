@@ -13,18 +13,27 @@ RUN apt-get update && apt-get install -y --fix-missing --no-install-recommends \
     git build-essential cmake pkg-config unzip libgtk2.0-dev \
     curl ca-certificates libcurl4-openssl-dev libssl-dev libjpeg62-turbo-dev \
     wget libavcodec-dev libavformat-dev libswscale-dev \
-    libtbb2 libtbb-dev libjpeg-dev libpng-dev libtiff-dev libdc1394-22-dev \
-    ffmpeg sudo && \
+    libtbb2 libtbb-dev libjpeg-dev libpng-dev libtiff-dev libdc1394-22-dev sudo && \
     rm -rf /var/lib/apt/lists/*
 
 #############################################
-# Install OpenCV and FFmpeg from source with -fPIC flag
+# Install FFmpeg from source with -fPIC flag
 
-# Install OpenCV from source
+# Recompile FFmpeg libraries with -fPIC
+RUN apt-get source ffmpeg && cd ffmpeg-* && \
+    ./configure --enable-shared --enable-pic && \
+    make -j$(nproc) && make install && \
+    ldconfig && \
+    cd .. && rm -rf ffmpeg-*
+
+#############################################
+# Install OpenCV from source with -fPIC flag
+
 RUN curl -L https://github.com/opencv/opencv/archive/refs/tags/4.10.0.tar.gz -o opencv.tar.gz && \
     mkdir opencv && tar -xzf opencv.tar.gz -C opencv --strip-components=1 && rm opencv.tar.gz && \
     cd opencv && mkdir build && cd build && \
-    cmake -D CMAKE_BUILD_TYPE=Release -D CMAKE_INSTALL_PREFIX=/usr/local -D BUILD_SHARED_LIBS=OFF -D CMAKE_CXX_FLAGS=-fPIC .. && \
+    cmake -D CMAKE_BUILD_TYPE=Release -D CMAKE_INSTALL_PREFIX=/usr/local \
+          -D BUILD_SHARED_LIBS=OFF -D CMAKE_CXX_FLAGS="-fPIC" .. && \
     make -j$(nproc) && make install && cd ../.. && rm -rf opencv
 
 ############################################
