@@ -2,6 +2,7 @@ package computervision
 
 import (
 	"encoding/json"
+	"fmt"
 	"image"
 	"os/exec"
 	"time"
@@ -243,18 +244,22 @@ func saveImageToFile(img *image.Gray, path string) error {
 }
 
 func runYOLODetection(imagePath string) ([]Detection, error) {
-	// Command to run the Python script
 	cmd := exec.Command("python3", "yolo_detection.py", imagePath)
 
-	// Run the command and capture the output
 	output, err := cmd.Output()
 	if err != nil {
+		log.Log.Error(fmt.Sprintf("Error running YOLO detection script: ", err.Error()))
 		return nil, err
 	}
 
-	// Parse the JSON output
+	if len(output) == 0 {
+		log.Log.Error("YOLO detection script returned empty output.")
+		return nil, fmt.Errorf("empty output from YOLO detection script")
+	}
+
 	var detections []Detection
 	if err := json.Unmarshal(output, &detections); err != nil {
+		log.Log.Error(fmt.Sprintf("Error parsing YOLO detection output: %s", err.Error()))
 		return nil, err
 	}
 
